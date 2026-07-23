@@ -35,7 +35,9 @@ enum Commands {
     },
     /// Restore a saved session
     Restore {
-        /// Session name (default: "latest")
+        /// Session name (default: "latest"). Pass "autosave" to always
+        /// restore the newest autosave-* session, regardless of
+        /// whether "latest" also exists.
         name: Option<String>,
         /// Preview without executing
         #[arg(short, long)]
@@ -133,7 +135,32 @@ fn main() {
 
             let name = name.unwrap_or_else(|| config.general.default_session.clone());
 
-            let session = match load_session(&name, &sessions_dir) {
+            // "autosave" is a reserved name, not a session on disk: it
+            // always means "the newest autosave-* session", regardless
+            // of whether a manually-saved "latest" also exists. Without
+            // this, `restore` (or `restore latest`) only ever falls
+            // back to the newest autosave when "latest" is missing
+            // entirely -- once you've saved "latest" manually even
+            // once, it silently shadows every later autosave forever.
+            let session = if name == "autosave" {
+                match hyprflow::session::list_autosave_sessions(&sessions_dir) {
+                    Ok(autosaves) if !autosaves.is_empty() => {
+                        let newest = &autosaves[0].name;
+                        match load_session(newest, &sessions_dir) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("Error loading session '{}': {}", newest, e);
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    _ => {
+                        eprintln!("No autosave sessions available.");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match load_session(&name, &sessions_dir) {
                 Ok(s) => s,
                 Err(hyprflow::session::SessionError::NotFound(_)) => {
                     // If requesting the default session and it doesn't exist,
@@ -171,6 +198,7 @@ fn main() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
+            }
             };
 
             if let Some(ref age_str) = max_age {
